@@ -1,0 +1,942 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Reflection;
+using System.Data.SqlClient;
+using System.Data;
+
+public class Funcoes
+{
+    /// <summary>
+    /// Função responsável por converter os tipos do C# para tipos do Banco Sql Server
+    /// </summary>
+    /// <param name="theType">Tipagem do atributo</param>
+    /// <returns>retorna um tipo SqlDBType</returns>
+    private static SqlDbType GetDBType(System.Type theType)
+    {
+        System.Data.SqlClient.SqlParameter p1 = null;
+        System.ComponentModel.TypeConverter tc = null;
+        p1 = new System.Data.SqlClient.SqlParameter();
+        tc = System.ComponentModel.TypeDescriptor.GetConverter(p1.DbType);
+        if (tc.CanConvertFrom(theType))
+        {
+            p1.DbType = (System.Data.DbType)tc.ConvertFrom(theType.Name);
+        }
+        else
+        {
+            //Try brute force
+            try
+            {
+                p1.DbType = (System.Data.DbType)tc.ConvertFrom(theType.Name);
+            }
+            catch (Exception ex)
+            {
+                throw (new Exception(ex.Message + "-" + ex.Source));
+            }
+        }
+        return p1.SqlDbType;
+    }
+
+    /// <summary>
+    /// Funcao Responsável por criar os Parametros para gravação em Banco, baseado nos atributos do objeto
+    /// </summary>
+    /// <param name="cmd">SqlCommand onde será adicionado os parametros</param>
+    /// <param name="objeto">objeto que contem os valores dos parametros</param>
+    /// <param name="assumirValorNulo">Informando como verdadeiro, o método assumirá valor nulo caso o 
+    /// parametro seja do tipo inteiro e seu valor igual a 0(zero). Isso ocorre para previnir que mande valores zerados para chaves estrangeiras</param>
+    public static void addParametros(SqlCommand cmd, Object objeto, Boolean assumirValorNulo)
+    {
+        FieldInfo[] propriedades = objeto.GetType().GetFields();
+
+        foreach (FieldInfo p in propriedades)
+        {
+            SqlParameter param = cmd.CreateParameter();
+            try
+            {
+                param.SqlDbType = GetDBType(p.FieldType);
+            }
+            catch
+            {
+                continue;//se a funcao GetDBType não conseguir encontrar uma tipagem do banco correspondente, aqui é ignorador o parametro e passado para o proximo atributo
+            }
+            param.ParameterName = "@" + p.Name;
+            param.Value = p.GetValue(objeto);
+
+            cmd.Parameters.Add(param);
+        }
+
+
+        foreach (SqlParameter parameter in cmd.Parameters)
+        {
+            if (parameter.Value == null)
+            {
+                parameter.Value = DBNull.Value;
+            }
+            else if (parameter.Value.ToString() == string.Empty)
+            {
+                parameter.Value = DBNull.Value;
+            }
+            else if (parameter.SqlDbType == SqlDbType.Int)
+            {
+                if (assumirValorNulo)
+                {
+                    if (Convert.ToInt32(parameter.Value) == 0) { parameter.Value = DBNull.Value; }
+                }
+            }
+            else if (parameter.SqlDbType == SqlDbType.Decimal)
+            {
+                if (assumirValorNulo)
+                {
+                    if (Convert.ToDecimal(parameter.Value) == 0) { parameter.Value = DBNull.Value; }
+                }
+            }
+            /*
+            else if (Microsoft.VisualBasic.Information.IsNumeric(parameter.Value))
+            {
+                string verdadeiro = parameter.Value.ToString();
+                if (verdadeiro.ToLower() == "true" || verdadeiro.ToLower() == "false") { continue; }
+                if (Convert.ToDecimal(parameter.Value) == 0) { parameter.Value = DBNull.Value; }
+            }*/
+            else if (Microsoft.VisualBasic.Information.IsDate(parameter.Value))
+            {
+                if (zerarTime(Convert.ToDateTime(parameter.Value)) == new DateTime())
+                {
+                    parameter.Value = DBNull.Value;
+                }
+                else if (zerarTime(Convert.ToDateTime(parameter.Value)) < new DateTime(1906, 01, 01))
+                {
+                    parameter.Value = DBNull.Value;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Funcao Responsável por criar os Parametros para gravação em Banco, baseado nos atributos do objeto
+    /// *Desenvolvida por Alan Lira e Altevir Cardoso Neto
+    /// </summary>
+    /// <param name="cmd">SqlCommand onde será adicionado os parametros</param>
+    /// <param name="objeto">objeto que contem os valores dos parametros</param>
+    /// <param name="parametrosExcecao">Uma lista de nomes de parametros que fogem à regra, ou seja, estes nao receberão nulos caso sejam inteiros e com valor igual a 0(zero)</param>
+    public static void addParametros(SqlCommand cmd, Object objeto, List<string> parametrosExcecao)
+    {
+        FieldInfo[] propriedades = objeto.GetType().GetFields();
+
+        foreach (FieldInfo p in propriedades)
+        {
+            SqlParameter param = cmd.CreateParameter();
+            try
+            {
+                param.SqlDbType = GetDBType(p.FieldType);
+            }
+            catch
+            {
+                continue;//se a funcao GetDBType não conseguir encontrar uma tipagem do banco correspondente, aqui é ignorador o parametro e passado para o proximo atributo
+            }
+            param.ParameterName = "@" + p.Name;
+            param.Value = p.GetValue(objeto);
+
+            cmd.Parameters.Add(param);
+        }
+
+
+        foreach (SqlParameter parameter in cmd.Parameters)
+        {
+            if (parameter.Value == null)
+            {
+                parameter.Value = DBNull.Value;
+            }
+            else if (parameter.Value.ToString() == string.Empty)
+            {
+                parameter.Value = DBNull.Value;
+            }
+            else if (parameter.SqlDbType == SqlDbType.Int)
+            {
+                Boolean eExcecao = false;
+                for (int i = 0; i < parametrosExcecao.Count; i++)
+                {
+                    if (parameter.ParameterName == parametrosExcecao[i])
+                    {
+                        eExcecao = true;
+                        parametrosExcecao.RemoveAt(i);
+                        break;
+                    }
+                }
+                if (!eExcecao)
+                {
+                    if (Convert.ToInt32(parameter.Value) == 0) { parameter.Value = DBNull.Value; }
+                }
+            }
+
+            else if (Microsoft.VisualBasic.Information.IsDate(parameter.Value))
+            {
+                if (zerarTime(Convert.ToDateTime(parameter.Value)) == new DateTime())
+                {
+                    parameter.Value = DBNull.Value;
+                }
+                else if (zerarTime(Convert.ToDateTime(parameter.Value)) == new DateTime(1900, 01, 01))
+                {
+                    parameter.Value = DBNull.Value;
+                }
+            }
+        }
+    }
+
+
+    /// <summary>
+    /// Funcao Responsável por criar os Parametros para gravação em Banco, baseado nos atributos do objeto
+    /// </summary>
+    /// <param name="cmd">SqlCommand onde será adicionado os parametros</param>
+    /// <param name="objeto">objeto que contem os valores dos parametros</param>
+    /// <param name="parametrosExcecao">Uma lista de nomes de parametros que fogem à regra, ou seja, estes nao receberão nulos caso sejam inteiros e com valor igual a 0(zero)</param>
+    public static void addParametros(SqlCommand cmd, Object objeto, Boolean assumirValorNulo, List<string> parametrosExcecao)
+    {
+        //Obtem os atributos da instancia do objeto, no caso das propriedades usaria objeto.GetType().GetProperties()
+        FieldInfo[] propriedades = objeto.GetType().GetFields();
+
+        //percorro os atributos do objeto
+        foreach (FieldInfo p in propriedades)
+        {
+            //crio o parametro
+            SqlParameter param = cmd.CreateParameter();
+            try
+            {
+                //obtenho o tipo correspondente no banco String = nvarchar, etc.
+                param.SqlDbType = GetDBType(p.FieldType);
+            }
+            catch
+            {
+                continue;//se a funcao GetDBType não conseguir encontrar uma tipagem do banco correspondente, aqui é ignorado o parametro e passado para o proximo atributo
+            }
+            param.ParameterName = "@" + p.Name;
+            param.Value = p.GetValue(objeto);
+
+            //adiciono o parametro ao cmd
+            cmd.Parameters.Add(param);
+        }
+
+        //percorro os parametros gerados
+        foreach (SqlParameter parameter in cmd.Parameters)
+        {
+            if (parameter.Value == null)
+            {
+                parameter.Value = DBNull.Value;
+            }
+            //se o parametro tiver no value uma string vazia, é setado nulo
+            else if (parameter.Value.ToString() == string.Empty)
+            {
+                parameter.Value = DBNull.Value;
+            }
+            //por padrão essa sobrecarga de método verifica quando o parametro é do tipo int, 
+            //analisa uma lista de excessoes que não aderem a regra(quando o valor inteiro for igual a zero estabelecer nulo, devido utilização de foreign key)
+            //Caso o parametro assumir nulo for passado como true, os valores inteiros zerados assumirão nulo, desde que não estejam na lista de excessões.
+            //Caso o parametro assumir nulo for passado como false, os valores inteiros zerados continuarão zerados, desde que não estejam na lista de excessões, nesse caso assumirá nulo
+            else if (parameter.SqlDbType == SqlDbType.Int)
+            {
+                Boolean eExcecao = false;
+                for (int i = 0; i < parametrosExcecao.Count; i++)
+                {
+                    if (parameter.ParameterName == parametrosExcecao[i])
+                    {
+                        eExcecao = true;
+                        parametrosExcecao.RemoveAt(i);
+                        break;
+                    }
+                }
+                if ((assumirValorNulo && !eExcecao) || (!assumirValorNulo && eExcecao))
+                {
+                    if (Convert.ToInt32(parameter.Value) == 0) { parameter.Value = DBNull.Value; }
+                }
+            }
+            //Utiliza uma funcao do VB para analisar se o parametro caracteriza data
+            else if (Microsoft.VisualBasic.Information.IsDate(parameter.Value))
+            {
+                //se a data for igual a data padrão do C#, isso quer dizer que não corresponte a um valor válido, então é assumido nulo
+                if (Convert.ToDateTime(parameter.Value).Date == new DateTime())
+                {
+                    parameter.Value = DBNull.Value;
+                }
+                //se a data for igual a 01/01/1900(data minima do banco) também é consideradao nulo
+                else if (Convert.ToDateTime(parameter.Value).Date == new DateTime(1900, 01, 01))
+                {
+                    parameter.Value = DBNull.Value;
+                }
+            }
+        }
+    }
+
+    public static DateTime zerarTime(DateTime data)
+    {
+        return new DateTime(data.Year, data.Month, data.Day);
+    }
+
+    /// <summary>
+    /// Função para preencher o objeto com um SqlDataReader
+    /// </summary>
+    /// <param name="reader">SqlDataReader que contem os dados das Colunas</param>
+    /// <param name="objeto">Objeto que receberá os valores</param>
+    public static void preencheObjetos(SqlDataReader reader, Object objeto)
+    {
+        FieldInfo[] propriedades = objeto.GetType().GetFields();
+        String nomeDoCampo = "";
+        String primeiroCaractere = "";
+        for (int i = 0; i < reader.FieldCount; i++)
+        {
+            nomeDoCampo = reader.GetName(i);
+            primeiroCaractere = nomeDoCampo.Substring(0, 1).ToLower();
+            nomeDoCampo = primeiroCaractere + nomeDoCampo.Remove(0, 1).Replace("_", "");
+
+            if (!string.IsNullOrEmpty(reader[i].ToString()))
+            {
+                foreach (FieldInfo p in propriedades)
+                {
+                    if (p.Name == nomeDoCampo)
+                    {
+                        if (reader[i].GetType().Name == System.TypeCode.Decimal.ToString())
+                        {
+                            if (p.FieldType.Name == System.TypeCode.Decimal.ToString())
+                            {
+                                p.SetValue(objeto, Convert.ToDecimal(reader.GetValue(i)));
+                            }
+                            else
+                            {
+                                p.SetValue(objeto, Convert.ToInt32(reader.GetValue(i)));
+                            }
+                        }
+                        else if (reader[i].GetType().Name == System.TypeCode.String.ToString())
+                        {
+                            p.SetValue(objeto, reader.GetValue(i).ToString().Trim());
+                        }
+                        else if (reader[i].GetType().Name == System.TypeCode.Single.ToString())
+                        {
+                            p.SetValue(objeto, Convert.ToDecimal(reader.GetValue(i)));
+                        }
+                        else
+                        {
+                            p.SetValue(objeto, reader.GetValue(i) == DBNull.Value ? reader.GetValue(i).ToString().Trim() : reader.GetValue(i));
+                        }
+                        break;
+                    }
+                    else if (reader[i].GetType().Name == System.TypeCode.DBNull.ToString())
+                    {
+                        p.SetValue(objeto, null);
+                    }
+                }
+            }
+        }
+    }
+
+
+	   /// <summary>
+    /// Função para preencher o objeto com um SqlDataReader
+    /// *Desenvolvida por Alan Lira e Altevir Cardoso Neto
+    /// </summary>
+    /// <param name="reader">SqlDataReader que contem os dados das Colunas</param>
+    /// <param name="objeto">Objeto que receberá os valores</param>
+    public static void preencheObjetos(SqlDataReader reader, Object objeto)
+    {
+        //Obtem os atributos da instancia do objeto, no caso das propriedades usaria objeto.GetType().GetProperties()
+        FieldInfo[] propriedades = objeto.GetType().GetFields();
+        String nomeDoCampo = "";
+        String primeiroCaractere = "";
+        //percorro as colunas do meu reader
+        for (int i = 0; i < reader.FieldCount; i++)
+        {
+            nomeDoCampo = reader.GetName(i);
+            primeiroCaractere = nomeDoCampo.Substring(0, 1).ToLower();
+            nomeDoCampo = primeiroCaractere + nomeDoCampo.Remove(0, 1).Replace("_", "");
+
+            /*if (!string.IsNullOrEmpty(reader[i].ToString()))
+            {*/
+            //percorro os atributos do objeto
+            foreach (FieldInfo p in propriedades)
+            {
+                //se o campo do banco corresponde ao atributo
+                if (p.Name.ToUpper().Equals(nomeDoCampo.ToUpper()))
+                {
+                    //se o campo do banco se apresenta como decimal
+                    if (reader[i].GetType().Name == System.TypeCode.Decimal.ToString())
+                    {
+                        //se o atributo da classe corresponde a decimal tambem
+                        if (p.FieldType.Name == System.TypeCode.Decimal.ToString())
+                        {
+                            p.SetValue(objeto, Convert.ToDecimal(reader.GetValue(i)));
+                        }
+                        //se o campo da classe for diferente de decimal considero que o campo seja numeric(15,0) entao converto pra INT32
+                        else
+                        {
+                            p.SetValue(objeto, Convert.ToInt32(reader.GetValue(i)));
+                        }
+                    }
+                    else if (reader[i].GetType().Name == System.TypeCode.Double.ToString() &&
+                       p.FieldType.Name == System.TypeCode.Decimal.ToString())
+                    {
+                        p.SetValue(objeto, Convert.ToDecimal(reader.GetValue(i)));
+                    }
+
+                    
+
+                    //se o campo do banco se apresentar como string
+                    else if (reader[i].GetType().Name == System.TypeCode.String.ToString())
+                    {
+                        //se o atributo da classe for char, converto
+                        if (p.FieldType.Name == System.TypeCode.Char.ToString())
+                        {
+                            p.SetValue(objeto, Convert.ToChar(reader.GetValue(i)));
+                        }
+                        else
+                        {
+                            p.SetValue(objeto, reader.GetValue(i).ToString().Trim());
+                        }
+                    }
+                    //Se o campo do corresponder a Single, quer dizer que o campo no banco é real, então converto para Decimal (padrão)
+                    else if (reader[i].GetType().Name == System.TypeCode.Single.ToString())
+                    {
+                        p.SetValue(objeto, Convert.ToDecimal(reader.GetValue(i)));
+                    }
+                    
+                    else if (reader[i].GetType().Name == "TimeSpan")
+                    {
+                        if (p.FieldType.Name == "Tempo")
+                        {
+                            p.SetValue(objeto, Tempo.ConvertToTempo((TimeSpan)reader.GetValue(i)));
+                        }
+                        else
+                        {
+                            p.SetValue(objeto, reader.GetValue(i));
+                        }
+                    }
+                    else
+                    {
+                        //Caso não corresponda a nenhum dos tipo acima vejo se o campo é nulo
+                        if (reader.GetValue(i) == DBNull.Value)
+                        {
+                            //se for string, jogo uma string vazia, pra não deixá-la nula
+                            if (p.FieldType.Name == System.TypeCode.String.ToString())
+                            {
+                                p.SetValue(objeto, "");
+                            }
+                        }
+                        //caso o campo não for nulo, então deixo que o próprio metodo SetValue defina automaticamente
+                        //Caso o tipo do campo do banco, não corresponda ao tipo do atributo poderá estourar uma excessão
+                        else
+                        {
+                            p.SetValue(objeto, reader.GetValue(i));
+                        }
+                    }
+                    break;
+                }
+                /*else if (reader[i].GetType().Name == System.TypeCode.DBNull.ToString())
+                {
+                    p.SetValue(objeto, null);
+                }*/
+            }
+            /*}*/
+        }
+    }
+
+    /// <summary>
+    /// Função para preencher o objeto com um DataRow
+    /// *Desenvolvida por Guilherme Alves
+    /// </summary>
+    /// <param name="reader">DataRow que contem os dados das Colunas</param>
+    /// <param name="objeto">Objeto que receberá os valores</param>
+    public static void preencheObjetos(DataRow reader, Object objeto)
+    {
+        FieldInfo[] propriedades = objeto.GetType().GetFields();
+
+        String nomeDoCampo = String.Empty;
+        String nomeBusca = String.Empty;
+        String primeiroCaractere = String.Empty;
+
+        for (int i = 0; i < reader.Table.Columns.Count; i++)
+        {
+            foreach (FieldInfo p in propriedades)
+            {
+                nomeBusca = reader.Table.Columns[i].ToString();
+                nomeDoCampo = reader.Table.Columns[i].ToString();
+                primeiroCaractere = nomeDoCampo.Substring(0, 1).ToLower();
+                nomeDoCampo = primeiroCaractere + nomeDoCampo.Remove(0, 1).Replace("_", "");
+
+                if(nomeDoCampo.ToUpper().Equals(p.Name.ToUpper()))
+                {
+                    if (reader[nomeBusca].GetType().Name == System.TypeCode.Decimal.ToString())
+                    {
+                        //se o atributo da classe corresponde a decimal tambem
+                        if (p.FieldType.Name == System.TypeCode.Decimal.ToString()) p.SetValue(objeto, Convert.ToDecimal(reader[nomeBusca]));
+                        //se o campo da classe for diferente de decimal considero que o campo seja numeric(15,0) entao converto pra INT32
+                        else p.SetValue(objeto, Convert.ToInt32(reader[nomeBusca]));
+                    }
+                    else if (reader[nomeBusca].GetType().Name == System.TypeCode.Double.ToString() && p.FieldType.Name == System.TypeCode.Decimal.ToString())
+                    {
+                        p.SetValue(objeto, Convert.ToDecimal(reader[nomeBusca]));
+                    }
+                    else if (reader[nomeBusca].GetType().Name == System.TypeCode.String.ToString())
+                    {
+                        //se o atributo da classe for char, converto
+                        if (p.FieldType.Name == System.TypeCode.Char.ToString()) p.SetValue(objeto, Convert.ToChar(reader[nomeBusca]));
+                        else p.SetValue(objeto, reader[nomeBusca].ToString().Trim());
+                    }
+                    else if (reader[nomeBusca].GetType().Name == System.TypeCode.Single.ToString())
+                    {
+                        p.SetValue(objeto, Convert.ToDecimal(reader[nomeBusca]));
+                    }
+                    else if (reader[nomeBusca].GetType().Name == "TimeSpan")
+                    {
+                        if (p.FieldType.Name == "Tempo") p.SetValue(objeto, Tempo.ConvertToTempo((TimeSpan)reader[nomeBusca]));
+                        else p.SetValue(objeto, reader[nomeBusca]);
+                    }
+                    else
+                    {
+                        //Caso não corresponda a nenhum dos tipo acima vejo se o campo é nulo
+                        if (reader[nomeBusca] == DBNull.Value)
+                        {
+                            //se for string, jogo uma string vazia, pra não deixá-la nula
+                            if (p.FieldType.Name == System.TypeCode.String.ToString())
+                            {
+                                p.SetValue(objeto, "");
+                            }
+                        }
+                        //caso o campo não for nulo, então deixo que o próprio metodo SetValue defina automaticamente
+                        //Caso o tipo do campo do banco, não corresponda ao tipo do atributo poderá estourar uma excessão
+                        else
+                        {
+                            p.SetValue(objeto, reader[nomeBusca]);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Função para preencher o objeto com um SqlDataReader
+    /// *Desenvolvida por Alan Lira e Altevir Cardoso Neto
+    /// </summary>
+    /// <param name="reader">SqlDataReader que contem os dados das Colunas</param>
+    /// <param name="objeto">Objeto que receberá os valores</param>
+    public static Object preencheObjetosWithReturn(SqlDataReader reader, Object objeto)
+    {
+        //Obtem os atributos da instancia do objeto, no caso das propriedades usaria objeto.GetType().GetProperties()
+        FieldInfo[] propriedades = objeto.GetType().GetFields();
+        String nomeDoCampo = "";
+        String primeiroCaractere = "";
+        //percorro as colunas do meu reader
+        for (int i = 0; i < reader.FieldCount; i++)
+        {
+            nomeDoCampo = reader.GetName(i);
+            primeiroCaractere = nomeDoCampo.Substring(0, 1).ToLower();
+            nomeDoCampo = primeiroCaractere + nomeDoCampo.Remove(0, 1).Replace("_", "");
+
+            /*if (!string.IsNullOrEmpty(reader[i].ToString()))
+            {*/
+            //percorro os atributos do objeto
+            foreach (FieldInfo p in propriedades)
+            {
+                //se o campo do banco corresponde ao atributo
+                if (p.Name.ToUpper().Equals(nomeDoCampo.ToUpper()))
+                {
+                    //se o campo do banco se apresenta como decimal
+                    if (reader[i].GetType().Name == System.TypeCode.Decimal.ToString())
+                    {
+                        //se o atributo da classe corresponde a decimal tambem
+                        if (p.FieldType.Name == System.TypeCode.Decimal.ToString())
+                        {
+                            p.SetValue(objeto, Convert.ToDecimal(reader.GetValue(i)));
+                        }
+                        //se o campo da classe for diferente de decimal considero que o campo seja numeric(15,0) entao converto pra INT32
+                        else
+                        {
+                            p.SetValue(objeto, Convert.ToInt32(reader.GetValue(i)));
+                        }
+                    }
+                    else if (reader[i].GetType().Name == System.TypeCode.Double.ToString() && p.FieldType.Name == System.TypeCode.Decimal.ToString())
+                    {
+                        p.SetValue(objeto, Convert.ToDecimal(reader.GetValue(i)));
+                    }
+
+                    else if (reader[i].GetType().Name == System.TypeCode.Int32.ToString() && p.FieldType.Name == System.TypeCode.Decimal.ToString())
+                    {
+                        p.SetValue(objeto, Convert.ToDecimal(reader.GetValue(i)));
+                    }
+
+                    //se o campo do banco se apresentar como string
+                    else if (reader[i].GetType().Name == System.TypeCode.String.ToString())
+                    {
+                        //se o atributo da classe for char, converto
+                        if (p.FieldType.Name == System.TypeCode.Char.ToString())
+                        {
+                            p.SetValue(objeto, Convert.ToChar(reader.GetValue(i)));
+                        }
+                        else
+                        {
+                            p.SetValue(objeto, reader.GetValue(i).ToString().Trim());
+                        }
+                    }
+                    //Se o campo do corresponder a Single, quer dizer que o campo no banco é real, então converto para Decimal (padrão)
+                    else if (reader[i].GetType().Name == System.TypeCode.Single.ToString())
+                    {
+                        p.SetValue(objeto, Convert.ToDecimal(reader.GetValue(i)));
+                    }
+                    else if (reader[i].GetType().Name == "TimeSpan")
+                    {
+                        if (p.FieldType.Name == "Tempo")
+                        {
+                            p.SetValue(objeto, Tempo.ConvertToTempo((TimeSpan)reader.GetValue(i)));
+                        }
+                        else
+                        {
+                            p.SetValue(objeto, reader.GetValue(i));
+                        }
+                    }
+                    else
+                    {
+                        //Caso não corresponda a nenhum dos tipo acima vejo se o campo é nulo
+                        if (reader.GetValue(i) == DBNull.Value)
+                        {
+                            //se for string, jogo uma string vazia, pra não deixá-la nula
+                            if (p.FieldType.Name == System.TypeCode.String.ToString())
+                            {
+                                p.SetValue(objeto, "");
+                            }
+                        }
+                        //caso o campo não for nulo, então deixo que o próprio metodo SetValue defina automaticamente
+                        //Caso o tipo do campo do banco, não corresponda ao tipo do atributo poderá estourar uma excessão
+                        else
+                        {
+                            p.SetValue(objeto, reader.GetValue(i));
+                        }
+                    }
+                    break;
+                }
+                /*else if (reader[i].GetType().Name == System.TypeCode.DBNull.ToString())
+                {
+                    p.SetValue(objeto, null);
+                }*/
+            }
+            /*}*/
+        }
+
+        return objeto;
+    }
+
+
+    /// <summary>
+    /// Funcão que cria o String Sql pra fazer a Inserção ou Update no Banco de Dados
+    /// </summary>
+    /// <param name="tabela">A tabela do Banco</param>
+    /// <param name="update">Passa se o comando é de Update ou não(Inserção)</param>
+    /// <param name="objOperacao">Objeto que vai ser usado para passar os valores</param>
+    /// <param name="where">No caso de ser um Update, passa a claúsula WHERE, nesse caso os campos colocados na clausula não são incluidos
+    /// no update.</param>
+    /// <returns>retorn um string com o comando</returns>
+    public static string montaSql(string tabela, Boolean update, Object objOperacao, string where)
+    {
+        string consulta = "";
+        string sql = "SELECT OBJECT_NAME(object_id) AS Tabela, c.name AS Coluna, t.name AS TipoDados FROM sys.COLUMNS c " +
+                      "INNER JOIN sys.types t ON t.system_type_id = c.system_type_id WHERE is_identity = 'false' AND OBJECT_NAME(object_id) = '" + tabela + "' AND t.name <> 'sysname'" +
+                      "ORDER BY Tabela, Coluna";
+        using (SqlConnection conn = new SqlConnection(conectaBanco()))
+        {
+            conn.Open();
+            string values = "VALUES (";
+            using (SqlCommand cmd = new SqlCommand(sql, conn))
+            {
+                using (SqlDataReader dr = cmd.ExecuteReader())
+                {
+                    if (!update)
+                    {
+                        consulta = "INSERT INTO " + tabela + "(";
+                    }
+                    else
+                    {
+                        consulta = "UPDATE " + tabela + " SET ";
+                    }
+                    while (dr.Read())
+                    {
+                        if (existeAtributo(dr["Coluna"].ToString(), objOperacao))
+                        {
+                            if (!update)
+                            {
+                                consulta += dr["Coluna"].ToString() + ", ";
+                                values += "@" + converteColunaToAtributo(dr["Coluna"].ToString()) + ", ";
+                            }
+                            else
+                            {
+                                string[] clausula = where.Split();
+                                Boolean existeWHERE = false;
+                                foreach (string str in clausula)
+                                {
+                                    if (str == dr["Coluna"].ToString())
+                                    {
+                                        existeWHERE = true;
+                                        break;
+                                    }
+                                }
+                                if (!existeWHERE) consulta += dr["Coluna"].ToString() + " = @" + converteColunaToAtributo(dr["Coluna"].ToString()) + ", ";
+                            }
+                        }
+                    }
+                    consulta = consulta.Remove(consulta.LastIndexOf(','), 1);
+                    if (!update)
+                    {
+                        values = values.Remove(values.LastIndexOf(','), 1);
+                        consulta += ") " + values + ")";
+                    }
+                    else
+                    {
+
+                        consulta += " WHERE " + where;
+                    }
+                    return consulta;
+                }
+            }
+        }
+    }
+
+
+    /// <summary>
+    /// Funcão que cria o String Sql pra fazer a Inserção ou Update no Banco de Dados
+    /// </summary>
+    /// <param name="tabela">A tabela do Banco</param>
+    /// <param name="update">Passa se o comando é de Update ou não(Inserção)</param>
+    /// <param name="objOperacao">Objeto que vai ser usado para passar os valores</param>
+    /// <param name="where">No caso de ser um Update, passa a claúsula WHERE, nesse caso os campos colocados na clausula não são incluidos
+    /// no update.</param>
+    /// <returns>retorn um string com o comando</returns>
+    public static string montaSql(string tabela, Boolean update, string where)
+    {
+        string consulta = "";
+        string sql = "SELECT OBJECT_NAME(object_id) AS Tabela, c.name AS Coluna, t.name AS TipoDados FROM sys.COLUMNS c " +
+                      "INNER JOIN sys.types t ON t.system_type_id = c.system_type_id WHERE is_identity = 'false' AND OBJECT_NAME(object_id) = '" + tabela + "' AND t.name <> 'sysname'" +
+                      "ORDER BY Tabela, Coluna";
+        using (SqlConnection conn = new SqlConnection(conectaBanco()))
+        {
+            conn.Open();
+            string values = "VALUES (";
+            using (SqlCommand cmd = new SqlCommand(sql, conn))
+            {
+                using (SqlDataReader dr = cmd.ExecuteReader())
+                {
+                    if (!update)
+                    {
+                        consulta = "INSERT INTO " + tabela + "(";
+                    }
+                    else
+                    {
+                        consulta = "UPDATE " + tabela + " SET ";
+                    }
+                    while (dr.Read())
+                    {
+                        if (!update)
+                        {
+                            consulta += dr["Coluna"].ToString() + ", ";
+                            values += "@" + converteColunaToAtributo(dr["Coluna"].ToString()) + ", ";
+                        }
+                        else
+                        {
+                            string[] clausula = where.Split();
+                            Boolean existeWHERE = false;
+                            foreach (string str in clausula)
+                            {
+                                if (str == dr["Coluna"].ToString())
+                                {
+                                    existeWHERE = true;
+                                    break;
+                                }
+                            }
+                            if (!existeWHERE) consulta += dr["Coluna"].ToString() + " = @" + converteColunaToAtributo(dr["Coluna"].ToString()) + ", ";
+                        }
+                    }
+                    consulta = consulta.Remove(consulta.LastIndexOf(','), 1);
+                    if (!update)
+                    {
+                        values = values.Remove(values.LastIndexOf(','), 1);
+                        consulta += ") " + values + ")";
+                    }
+                    else
+                    {
+
+                        consulta += " WHERE " + where;
+                    }
+                    return consulta;
+                }
+            }
+        }
+    }
+
+
+    /// <summary>
+    /// Funcão que cria o String Sql pra fazer a Inserção ou Update no Banco de Dados
+    /// </summary>
+    /// <param name="tabela">A tabela do Banco</param>
+    /// <param name="update">Passa se o comando é de Update ou não(Inserção)</param>
+    /// <param name="objOperacao">Objeto que vai ser usado para passar os valores</param>
+    /// <param name="where">No caso de ser um Update, passa a claúsula WHERE, nesse caso os campos colocados na clausula não são incluidos
+    /// no update.</param>
+    /// <returns>retorn um string com o comando</returns>
+    public static string montaSql(string tabela, Boolean update, string where, SqlConnection con, SqlTransaction transacao)
+    {
+        string consulta = "";
+        string sql = "SELECT OBJECT_NAME(object_id) AS Tabela, c.name AS Coluna, t.name AS TipoDados FROM sys.COLUMNS c " +
+                      "INNER JOIN sys.types t ON t.system_type_id = c.system_type_id WHERE is_identity = 'false' AND OBJECT_NAME(object_id) = '" + tabela + "' AND t.name <> 'sysname'" +
+                      "ORDER BY Tabela, Coluna";
+        string values = "VALUES (";
+        using (SqlCommand cmd = new SqlCommand(sql, con, transacao))
+        {
+            using (SqlDataReader dr = cmd.ExecuteReader())
+            {
+                if (!update)
+                {
+                    consulta = "INSERT INTO " + tabela + "(";
+                }
+                else
+                {
+                    consulta = "UPDATE " + tabela + " SET ";
+                }
+                while (dr.Read())
+                {
+                    if (!update)
+                    {
+                        consulta += dr["Coluna"].ToString() + ", ";
+                        values += "@" + converteColunaToAtributo(dr["Coluna"].ToString()) + ", ";
+                    }
+                    else
+                    {
+                        string[] clausula = where.Split();
+                        Boolean existeWHERE = false;
+                        foreach (string str in clausula)
+                        {
+                            if (str == dr["Coluna"].ToString())
+                            {
+                                existeWHERE = true;
+                                break;
+                            }
+                        }
+                        if (!existeWHERE) consulta += dr["Coluna"].ToString() + " = @" + converteColunaToAtributo(dr["Coluna"].ToString()) + ", ";
+                    }
+                }
+                consulta = consulta.Remove(consulta.LastIndexOf(','), 1);
+                if (!update)
+                {
+                    values = values.Remove(values.LastIndexOf(','), 1);
+                    consulta += ") " + values + ")";
+                }
+                else
+                {
+
+                    consulta += " WHERE " + where;
+                }
+                return consulta;
+            }
+        }
+    }
+
+
+    /// <summary>
+    /// Funcão que cria o String Sql pra fazer a Inserção ou Update no Banco de Dados
+    /// </summary>
+    /// <param name="tabela">A tabela do Banco</param>
+    /// <param name="update">Passa se o comando é de Update ou não(Inserção)</param>
+    /// <param name="objOperacao">Objeto que vai ser usado para passar os valores</param>
+    /// <param name="where">No caso de ser um Update, passa a claúsula WHERE, nesse caso os campos colocados na clausula não são incluidos
+    /// no update.</param>
+    /// <param name="con">Conexão da Base de dados</param>
+    /// <param name="transacao">Transacao utilizada</param>
+    /// <returns>retorn um string com o comando</returns>
+    public static string montaSql(string tabela, Boolean update, Object objOperacao, string where, SqlConnection con, SqlTransaction transacao)
+    {
+        string consulta = "";
+        string sql = "SELECT OBJECT_NAME(object_id) AS Tabela, c.name AS Coluna, t.name AS TipoDados FROM sys.COLUMNS c " +
+                      "INNER JOIN sys.types t ON t.system_type_id = c.system_type_id WHERE is_identity = 'false' AND OBJECT_NAME(object_id) = '" + tabela + "' AND t.name <> 'sysname'" +
+                      "ORDER BY Tabela, Coluna";
+        string values = "VALUES (";
+        using (SqlCommand cmd = new SqlCommand(sql, con, transacao))
+        {
+            using (SqlDataReader dr = cmd.ExecuteReader())
+            {
+                if (!update)
+                {
+                    consulta = "INSERT INTO " + tabela + "(";
+                }
+                else
+                {
+                    consulta = "UPDATE " + tabela + " SET ";
+                }
+                while (dr.Read())
+                {
+                    if (existeAtributo(dr["Coluna"].ToString(), objOperacao))
+                    {
+                        if (!update)
+                        {
+                            consulta += dr["Coluna"].ToString() + ", ";
+                            values += "@" + converteColunaToAtributo(dr["Coluna"].ToString()) + ", ";
+                        }
+                        else
+                        {
+                            string[] clausula = where.Split();
+                            Boolean existeWHERE = false;
+                            foreach (string str in clausula)
+                            {
+                                if (str == dr["Coluna"].ToString())
+                                {
+                                    existeWHERE = true;
+                                    break;
+                                }
+                            }
+                            if (!existeWHERE) consulta += dr["Coluna"].ToString() + " = @" + converteColunaToAtributo(dr["Coluna"].ToString()) + ", ";
+                        }
+                    }
+                }
+                consulta = consulta.Remove(consulta.LastIndexOf(','), 1);
+                if (!update)
+                {
+                    values = values.Remove(values.LastIndexOf(','), 1);
+                    consulta += ") " + values + ")";
+                }
+                else
+                {
+
+                    consulta += " WHERE " + where;
+                }
+                return consulta;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Função que verifica se existe um atributo correspondente ao campo do Banco passado.
+    /// </summary>
+    /// <param name="campo">Coluna do Banco de dados</param>
+    /// <param name="objeto">Objeto em questão</param>
+    /// <returns>retorna true se existe, caso contrário retorna false</returns>
+    private static Boolean existeAtributo(string campo, Object objeto)
+    {
+        FieldInfo[] propriedades = objeto.GetType().GetFields();
+
+        foreach (FieldInfo p in propriedades)
+        {
+            if (p.Name == converteColunaToAtributo(campo))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+
+    /// <summary>
+    /// Converte uma coluna para o nome do possível objeto
+    /// </summary>
+    /// <param name="nomeNoBanco">Coluna do Banco</param>
+    /// <returns>retorn o possível nome na classe</returns>
+    private static string converteColunaToAtributo(string nomeNoBanco)
+    {
+        String primeiroCaractere = "";
+
+        primeiroCaractere = nomeNoBanco.Substring(0, 1).ToLower();
+        return primeiroCaractere + nomeNoBanco.Remove(0, 1).Replace("_", "");
+    }
+}
