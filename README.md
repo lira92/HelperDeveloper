@@ -1,2 +1,2 @@
 # HelperDeveloper
-Gerador de Classes C#
+Class Generator for C# and AS3.
